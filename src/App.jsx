@@ -192,6 +192,108 @@ const solveBreakEvenNetRate = (optionA, optionB) => {
   return high * 100
 }
 
+const calculateMortgageBreakeven = (results, options, returnRate) => {
+  if (!results[0] || !results[1] || results[0].error || results[1].error) return null;
+  
+  const opt1 = results[0];
+  const opt2 = results[1];
+  
+  const principal1 = opt1.computed.principal;
+  const principal2 = opt2.computed.principal;
+  const mRate1 = opt1.computed.rate / 100 / 12;
+  const mRate2 = opt2.computed.rate / 100 / 12;
+  const mReturn = parseFloat(returnRate) / 100 / 12;
+  
+  if (!Number.isFinite(mReturn)) return null;
+
+  // Base monthly payments (P&I only)
+  const basePay1 = opt1.computed.payment;
+  const basePay2 = opt2.computed.payment;
+  
+  // PMI setup
+  const pmi1 = parseNumber(options[0].pmi);
+  const pmi2 = parseNumber(options[1].pmi);
+  const pmiThreshold1 = principal1 * 0.78;
+  const pmiThreshold2 = principal2 * 0.78;
+  
+  // Closing costs
+  const closingCost1 = parseNumber(options[0].closingCosts);
+  const closingCost2 = parseNumber(options[1].closingCosts);
+  const closingCost1Value = Number.isFinite(closingCost1) ? closingCost1 : 0;
+  const closingCost2Value = Number.isFinite(closingCost2) ? closingCost2 : 0;
+  
+  // Determine which option has lower payment (this gets the longer-term/lower-payment option)
+  const lowerPaymentIndex = basePay1 < basePay2 ? 0 : 1;
+  const higherPaymentIndex = lowerPaymentIndex === 0 ? 1 : 0;
+  
+  // Initial portfolio advantage: if you choose the lower payment option, 
+  // you save the closing costs from NOT choosing the higher payment option
+  const portfolioStartLower = lowerPaymentIndex === 0 ? closingCost2Value : closingCost1Value;
+  const portfolioStartHigher = higherPaymentIndex === 0 ? closingCost2Value : closingCost1Value;
+
+  let balance1 = principal1;
+  let balance2 = principal2;
+  let investmentsLower = portfolioStartLower;
+  let investmentsHigher = portfolioStartHigher;
+  
+  const months1 = opt1.computed.months;
+  const months2 = opt2.computed.months;
+  const maxMonths = Math.max(months1, months2);
+  
+  for (let month = 1; month <= maxMonths; month++) {
+    const active1 = month <= months1;
+    const active2 = month <= months2;
+    
+    // Check PMI status
+    const pmiActive1 = active1 && Number.isFinite(pmi1) && balance1 > pmiThreshold1;
+    const pmiActive2 = active2 && Number.isFinite(pmi2) && balance2 > pmiThreshold2;
+    
+    const pmiPayment1 = pmiActive1 ? pmi1 : 0;
+    const pmiPayment2 = pmiActive2 ? pmi2 : 0;
+    
+    // Total monthly payments including PMI
+    const totalPay1 = active1 ? basePay1 + pmiPayment1 : 0;
+    const totalPay2 = active2 ? basePay2 + pmiPayment2 : 0;
+    
+    // Determine payment difference dynamically
+    const payLower = lowerPaymentIndex === 0 ? totalPay1 : totalPay2;
+    const payHigher = higherPaymentIndex === 0 ? totalPay1 : totalPay2;
+    const monthlyDiff = payHigher - payLower;
+    
+    // 1. Grow Investments
+    // Lower payment option: invests the payment difference
+    investmentsLower = (investmentsLower + monthlyDiff) * (1 + mReturn);
+    // Higher payment option: continues to invest any previous portfolio (after loan is paid off)
+    const higherContribution = (higherPaymentIndex === 0 ? !active1 : !active2) ? payHigher : 0;
+    investmentsHigher = (investmentsHigher + higherContribution) * (1 + mReturn);
+
+    // 2. Reduce Balances (Amortization)
+    if (active1) {
+      const interest1 = balance1 * mRate1;
+      const principalPayment1 = Math.min(Math.max(basePay1 - interest1, 0), balance1);
+      balance1 = Math.max(balance1 - principalPayment1, 0);
+    }
+    
+    if (active2) {
+      const interest2 = balance2 * mRate2;
+      const principalPayment2 = Math.min(Math.max(basePay2 - interest2, 0), balance2);
+      balance2 = Math.max(balance2 - principalPayment2, 0);
+    }
+
+    // 3. Compare Total Net Wealth
+    const equity1 = principal1 - balance1;
+    const equity2 = principal2 - balance2;
+    
+    const netWealthLower = (lowerPaymentIndex === 0 ? equity1 : equity2) + investmentsLower;
+    const netWealthHigher = (higherPaymentIndex === 0 ? equity1 : equity2) + investmentsHigher;
+
+    if (netWealthLower > netWealthHigher) {
+      return month; // This is your breakeven month
+    }
+  }
+  return null;
+};
+
 
 const buildSchedule = (optionA, optionB, monthlyReturnRate) => {
   if (!optionA || !optionB) return { rows: [], meta: null }
@@ -918,6 +1020,14 @@ function App() {
                 Your net gain at the time of loan payoff would be <span className="outcome-highlight">{formatCurrency(outcomeSummary.portfolioTotal - outcomeSummary.payoffTotal)}</span>.
               </strong>
             </div>
+            {outcomeSummary.breakEvenMonth && (
+              <div>
+                <span>Strategy crossover point</span>
+                <strong>
+                  The 30-year + investment strategy will overtake the 15-year strategy at month <span className="outcome-highlight">{outcomeSummary.breakEvenMonth}</span> (year <span className="outcome-highlight">{(outcomeSummary.breakEvenMonth / 12).toFixed(1)}</span>).
+                </strong>
+              </div>
+            )}
           </div>
         ) : (
           <p className="muted">Complete both options to see the outcome summary.</p>
