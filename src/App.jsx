@@ -1130,12 +1130,12 @@ function App() {
                         : ''}
                     </td>
                     <td
-                      title={`Principal: ${formatCurrency(row.principalPaidA)}\nInterest: ${formatCurrency(row.interestPaidA)}`}
+                      title={`Principal: ${formatCurrency(row.principalPaidA)}\nInterest: ${formatCurrency(row.interestPaidA)}\nTotal Principal Earned: ${formatCurrency(results[0]?.computed?.principal - row.balanceA)}`}
                     >
                       {formatCurrency(row.paymentA)}
                     </td>
                     <td
-                      title={`Principal: ${formatCurrency(row.principalPaidB)}\nInterest: ${formatCurrency(row.interestPaidB)}`}
+                      title={`Principal: ${formatCurrency(row.principalPaidB)}\nInterest: ${formatCurrency(row.interestPaidB)}\nTotal Principal Earned: ${formatCurrency(results[1]?.computed?.principal - row.balanceB)}`}
                     >
                       {formatCurrency(row.paymentB)}
                     </td>
