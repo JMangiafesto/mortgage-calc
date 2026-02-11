@@ -684,6 +684,18 @@ function App() {
     return interestA < interestB ? options[0].label : options[1].label
   }, [bothValid, results, options])
 
+  const breakEvenMonth = useMemo(() => {
+    if (!bothValid || !results[0] || !results[1] || !Number.isFinite(returnRateValue)) return null
+    
+    const option1Months = results[0].computed.months
+    const option2Months = results[1].computed.months
+    
+    // Only calculate if one option is longer than the other
+    if (option1Months === option2Months) return null
+    
+    return calculateMortgageBreakeven(results, options, returnRate)
+  }, [bothValid, results, options, returnRate, returnRateValue])
+
   const outcomeSummary = useMemo(() => {
     if (!bothValid || !scheduleData.meta?.end) return null
     const payoffMonth = Math.min(results[0].computed.months, results[1].computed.months)
