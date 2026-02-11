@@ -724,8 +724,9 @@ function App() {
       portfolioTotal,
       payoffTotal,
       payoffYears: payoffRow ? payoffRow.month / 12 : null,
+      breakEvenMonth,
     }
-  }, [bothValid, scheduleData, results])
+  }, [bothValid, scheduleData, results, breakEvenMonth])
 
 
   const formatCurrency = (value) =>
