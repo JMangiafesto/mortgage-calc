@@ -288,6 +288,10 @@ const buildSchedule = (optionA, optionB, monthlyReturnRate) => {
         : 0
 
     if (Number.isFinite(monthlyReturnRate)) {
+      // Annuity Due formula with contributions at the beginning of the month: FV = P * [((1 + r)^n - 1) / r] * (1 + r)
+      // portfolioValue = (portfolioValue + contributionPrimary) * (1 + monthlyReturnRate)
+      // portfolioValueAlt = (portfolioValueAlt + contributionAlt) * (1 + monthlyReturnRate)
+      // Ordinary Annuity formula with contributions at the end of the month: FV = P * [((1 + r)^n - 1) / r]
       portfolioValue = portfolioValue * (1 + monthlyReturnRate) + contributionPrimary
       portfolioValueAlt = portfolioValueAlt * (1 + monthlyReturnRate) + contributionAlt
       portfolioContributionSum += contributionPrimary
