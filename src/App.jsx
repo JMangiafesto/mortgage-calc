@@ -1037,7 +1037,12 @@ function App() {
               <div>
                 <span>Strategy crossover point</span>
                 <strong>
-                  The 30-year + investment strategy will overtake the 15-year strategy at month <span className="outcome-highlight">{outcomeSummary.breakEvenMonth}</span> (year <span className="outcome-highlight">{(outcomeSummary.breakEvenMonth / 12).toFixed(1)}</span>).
+                  {(() => {
+                    const lowerPaymentIndex = results[0].computed.payment < results[1].computed.payment ? 0 : 1
+                    const higherPaymentIndex = lowerPaymentIndex === 0 ? 1 : 0
+                    return `The ${options[lowerPaymentIndex].label} + investment strategy will overtake the ${options[higherPaymentIndex].label} strategy at month `
+                  })()}
+                  <span className="outcome-highlight">{outcomeSummary.breakEvenMonth}</span> (year <span className="outcome-highlight">{(outcomeSummary.breakEvenMonth / 12).toFixed(1)}</span>).
                 </strong>
               </div>
             )}
