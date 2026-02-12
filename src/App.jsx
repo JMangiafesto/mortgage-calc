@@ -192,7 +192,7 @@ const solveBreakEvenNetRate = (optionA, optionB) => {
   return high * 100
 }
 
-const calculateMortgageBreakeven = (results, options, returnRate) => {
+const calculateMortgageBreakeven = (results, options, returnRate, taxRate = 0.15) => {
   if (!results[0] || !results[1] || results[0].error || results[1].error) return null;
   
   const opt1 = results[0];
@@ -222,23 +222,31 @@ const calculateMortgageBreakeven = (results, options, returnRate) => {
   const closingCost1Value = Number.isFinite(closingCost1) ? closingCost1 : 0;
   const closingCost2Value = Number.isFinite(closingCost2) ? closingCost2 : 0;
   
-  // Determine which option has lower payment (this gets the longer-term/lower-payment option)
-  const lowerPaymentIndex = basePay1 < basePay2 ? 0 : 1;
-  const higherPaymentIndex = lowerPaymentIndex === 0 ? 1 : 0;
-  
-  // Initial portfolio advantage: if you choose the lower payment option, 
-  // you save the closing costs from NOT choosing the higher payment option
-  const portfolioStartLower = lowerPaymentIndex === 0 ? closingCost2Value : closingCost1Value;
-  const portfolioStartHigher = higherPaymentIndex === 0 ? closingCost2Value : closingCost1Value;
+  // Use the same logic as buildSchedule
+  const paymentA = opt1.computed.payment;
+  const paymentB = opt2.computed.payment;
+  const higherIndex = paymentA === paymentB ? null : paymentA > paymentB ? 0 : 1;
+  const closingCostA = closingCost1Value;
+  const closingCostB = closingCost2Value;
+  const principalDelta = principal2 - principal1;
+  const downToPortfolioA = principalDelta < 0 ? Math.abs(principalDelta) : 0;
+  const downToPortfolioB = principalDelta > 0 ? principalDelta : 0;
+  const closingToPortfolioA = (Number.isFinite(closingCostB) ? closingCostB : 0) + downToPortfolioA;
+  const closingToPortfolioB = (Number.isFinite(closingCostA) ? closingCostA : 0) + downToPortfolioB;
+  const initialDelta = Math.abs(paymentA - paymentB);
 
   let balance1 = principal1;
   let balance2 = principal2;
-  let investmentsLower = portfolioStartLower;
-  let investmentsHigher = portfolioStartHigher;
+  let portfolioValue = closingToPortfolioA;
+  let portfolioValueAlt = closingToPortfolioB;
+  let portfolioContributionSum = closingToPortfolioA;
+  let portfolioAltContributionSum = closingToPortfolioB;
   
   const months1 = opt1.computed.months;
   const months2 = opt2.computed.months;
   const maxMonths = Math.max(months1, months2);
+  
+  let prevDiff = null;
   
   for (let month = 1; month <= maxMonths; month++) {
     const active1 = month <= months1;
@@ -248,26 +256,13 @@ const calculateMortgageBreakeven = (results, options, returnRate) => {
     const pmiActive1 = active1 && Number.isFinite(pmi1) && balance1 > pmiThreshold1;
     const pmiActive2 = active2 && Number.isFinite(pmi2) && balance2 > pmiThreshold2;
     
-    const pmiPayment1 = pmiActive1 ? pmi1 : 0;
-    const pmiPayment2 = pmiActive2 ? pmi2 : 0;
+    const pmiPaid1 = pmiActive1 ? pmi1 : 0;
+    const pmiPaid2 = pmiActive2 ? pmi2 : 0;
     
-    // Total monthly payments including PMI
-    const totalPay1 = active1 ? basePay1 + pmiPayment1 : 0;
-    const totalPay2 = active2 ? basePay2 + pmiPayment2 : 0;
+    const scheduledPayment1 = active1 ? basePay1 + pmiPaid1 : 0;
+    const scheduledPayment2 = active2 ? basePay2 + pmiPaid2 : 0;
     
-    // Determine payment difference dynamically
-    const payLower = lowerPaymentIndex === 0 ? totalPay1 : totalPay2;
-    const payHigher = higherPaymentIndex === 0 ? totalPay1 : totalPay2;
-    const monthlyDiff = payHigher - payLower;
-    
-    // 1. Grow Investments
-    // Lower payment option: invests the payment difference
-    investmentsLower = (investmentsLower + monthlyDiff) * (1 + mReturn);
-    // Higher payment option: continues to invest any previous portfolio (after loan is paid off)
-    const higherContribution = (higherPaymentIndex === 0 ? !active1 : !active2) ? payHigher : 0;
-    investmentsHigher = (investmentsHigher + higherContribution) * (1 + mReturn);
-
-    // 2. Reduce Balances (Amortization)
+    // Reduce Balances (Amortization)
     if (active1) {
       const interest1 = balance1 * mRate1;
       const principalPayment1 = Math.min(Math.max(basePay1 - interest1, 0), balance1);
@@ -279,18 +274,39 @@ const calculateMortgageBreakeven = (results, options, returnRate) => {
       const principalPayment2 = Math.min(Math.max(basePay2 - interest2, 0), balance2);
       balance2 = Math.max(balance2 - principalPayment2, 0);
     }
-
-    // 3. Compare Total Net Wealth
+    
+    // Calculate portfolio contributions (same as buildSchedule)
+    const contributionPrimary = Number.isFinite(initialDelta) ? initialDelta : 0;
+    const contributionAlt = !active2 && Number.isFinite(basePay2) && basePay2 > 0 ? basePay2 : 0;
+    
+    // Grow portfolios
+    portfolioValue = portfolioValue * (1 + mReturn) + contributionPrimary;
+    portfolioValueAlt = portfolioValueAlt * (1 + mReturn) + contributionAlt;
+    portfolioContributionSum += contributionPrimary;
+    portfolioAltContributionSum += contributionAlt;
+    
+    // Calculate net value difference using same logic as monthly table
+    const portfolioGain1 = portfolioValue - portfolioContributionSum;
+    const portfolioGain2 = portfolioValueAlt - portfolioAltContributionSum;
+    const tax1 = portfolioGain1 > 0 ? portfolioGain1 * taxRate : 0;
+    const tax2 = portfolioGain2 > 0 ? portfolioGain2 * taxRate : 0;
+    const afterTax1 = portfolioValue - tax1;
+    const afterTax2 = portfolioValueAlt - tax2;
     const equity1 = principal1 - balance1;
     const equity2 = principal2 - balance2;
+    const diff = (afterTax1 + equity1) - (afterTax2 + equity2);
     
-    const netWealthLower = (lowerPaymentIndex === 0 ? equity1 : equity2) + investmentsLower;
-    const netWealthHigher = (higherPaymentIndex === 0 ? equity1 : equity2) + investmentsHigher;
-
-    if (netWealthLower > netWealthHigher) {
-      return month; // This is your breakeven month
+    // Check for crossover
+    if (prevDiff !== null) {
+      // If sign changed, we found the crossover
+      if ((prevDiff < 0 && diff > 0) || (prevDiff > 0 && diff < 0)) {
+        return month;
+      }
     }
+    
+    prevDiff = diff;
   }
+  
   return null;
 };
 
@@ -657,6 +673,12 @@ function App() {
       const pmiTotal = Number.isFinite(pmiAmount) && pmiEndMonth
         ? pmiAmount * pmiEndMonth
         : Number.NaN
+      
+      // Calculate 15% capital gains tax
+      const taxRate = 0.15
+      const taxAmount = Number.isFinite(portfolioGain) && portfolioGain > 0 ? portfolioGain * taxRate : 0
+      const afterTaxPortfolioValue = portfolioValue - taxAmount
+      const afterTaxPortfolioGain = portfolioGain - taxAmount
 
       return {
         label: options[index].label,
@@ -667,6 +689,9 @@ function App() {
         interestDelta: interestSaved,
         portfolioValue,
         portfolioGain,
+        taxAmount,
+        afterTaxPortfolioValue,
+        afterTaxPortfolioGain,
         breakEvenRate: showBreakEven ? breakEvenRate : Number.NaN,
         breakEvenLabel: showBreakEven ? breakEvenLabel : '—',
         pmiAmount,
@@ -685,7 +710,7 @@ function App() {
   }, [bothValid, results, options])
 
   const breakEvenMonth = useMemo(() => {
-    if (!bothValid || !results[0] || !results[1] || !Number.isFinite(returnRateValue)) return null
+    if (!bothValid || !scheduleRows || scheduleRows.length === 0) return null
     
     const option1Months = results[0].computed.months
     const option2Months = results[1].computed.months
@@ -693,8 +718,43 @@ function App() {
     // Only calculate if one option is longer than the other
     if (option1Months === option2Months) return null
     
-    return calculateMortgageBreakeven(results, options, returnRate)
-  }, [bothValid, results, options, returnRate, returnRateValue])
+    // Find crossover with tax (using exact same calculation as monthly table)
+    let prevDiffWithTax = null
+    let withTax = null
+    for (const row of scheduleRows) {
+      const taxRate = 0.15
+      const tax1 = row.portfolioGain > 0 ? row.portfolioGain * taxRate : 0
+      const tax2 = row.portfolioGainAlt > 0 ? row.portfolioGainAlt * taxRate : 0
+      const afterTax1 = row.portfolioValue - tax1
+      const afterTax2 = row.portfolioValueAlt - tax2
+      const equity1 = results[0]?.computed?.principal - row.balanceA
+      const equity2 = results[1]?.computed?.principal - row.balanceB
+      const diff = (afterTax1 + equity1) - (afterTax2 + equity2)
+      
+      if (prevDiffWithTax !== null && prevDiffWithTax * diff < 0) {
+        withTax = row.month
+        break
+      }
+      prevDiffWithTax = diff
+    }
+    
+    // Find crossover without tax
+    let prevDiffNoTax = null
+    let noTax = null
+    for (const row of scheduleRows) {
+      const equity1 = results[0]?.computed?.principal - row.balanceA
+      const equity2 = results[1]?.computed?.principal - row.balanceB
+      const diff = (row.portfolioValue + equity1) - (row.portfolioValueAlt + equity2)
+      
+      if (prevDiffNoTax !== null && prevDiffNoTax * diff < 0) {
+        noTax = row.month
+        break
+      }
+      prevDiffNoTax = diff
+    }
+    
+    return { withTax, noTax }
+  }, [bothValid, scheduleRows, results])
 
   const outcomeSummary = useMemo(() => {
     if (!bothValid || !scheduleData.meta?.end) return null
@@ -707,11 +767,20 @@ function App() {
     const interestSaved = end.interestDeltaSum
     const portfolioOption1 = end.portfolioValue
     const portfolioOption2 = end.portfolioValueAlt
+    const portfolioGain1 = end.portfolioGain
+    const portfolioGain2 = end.portfolioGainAlt
+    
+    // Apply 15% long-term capital gains tax to portfolio gains
+    const taxRate = 0.15
+    const tax1 = Number.isFinite(portfolioGain1) && portfolioGain1 > 0 ? portfolioGain1 * taxRate : 0
+    const tax2 = Number.isFinite(portfolioGain2) && portfolioGain2 > 0 ? portfolioGain2 * taxRate : 0
+    const afterTaxPortfolio1 = portfolioOption1 - tax1
+    const afterTaxPortfolio2 = portfolioOption2 - tax2
 
     const netOption1 =
-      portfolioOption1 + (lowerInterestIndex === 0 ? interestSaved : 0)
+      afterTaxPortfolio1 + (lowerInterestIndex === 0 ? interestSaved : 0)
     const netOption2 =
-      portfolioOption2 + (lowerInterestIndex === 1 ? interestSaved : 0)
+      afterTaxPortfolio2 + (lowerInterestIndex === 1 ? interestSaved : 0)
 
     if (!Number.isFinite(netOption1) || !Number.isFinite(netOption2)) return null
 
@@ -736,7 +805,8 @@ function App() {
       portfolioTotal,
       payoffTotal,
       payoffYears: payoffRow ? payoffRow.month / 12 : null,
-      breakEvenMonth,
+      breakEvenMonthWithTax: breakEvenMonth?.withTax,
+      breakEvenMonthNoTax: breakEvenMonth?.noTax,
     }
   }, [bothValid, scheduleData, results, breakEvenMonth])
 
@@ -1033,16 +1103,36 @@ function App() {
                 Your net gain at the time of loan payoff would be <span className="outcome-highlight">{formatCurrency(outcomeSummary.portfolioTotal - outcomeSummary.payoffTotal)}</span>.
               </strong>
             </div>
-            {outcomeSummary.breakEvenMonth && (
+            {outcomeSummary.breakEvenMonthWithTax && (
               <div>
                 <span>Strategy crossover point</span>
                 <strong>
                   {(() => {
                     const lowerPaymentIndex = results[0].computed.payment < results[1].computed.payment ? 0 : 1
                     const higherPaymentIndex = lowerPaymentIndex === 0 ? 1 : 0
-                    return `The ${options[lowerPaymentIndex].label} + investment strategy will overtake the ${options[higherPaymentIndex].label} strategy at month `
+                    const withTax = outcomeSummary.breakEvenMonthWithTax
+                    const noTax = outcomeSummary.breakEvenMonthNoTax
+                    const hasDifference = noTax && withTax !== noTax
+                    return (
+                      <>
+                        {`The ${options[lowerPaymentIndex].label} + investment strategy will overtake the ${options[higherPaymentIndex].label} strategy at month `}
+                        <span className="outcome-highlight">{withTax}</span>
+                        {` (year `}
+                        <span className="outcome-highlight">{(withTax / 12).toFixed(1)}</span>
+                        {`)`}
+                        {hasDifference && (
+                          <>
+                            {`. Without taxes considered: month `}
+                            <span className="outcome-highlight">{noTax}</span>
+                            {` (year `}
+                            <span className="outcome-highlight">{(noTax / 12).toFixed(1)}</span>
+                            {`)`}
+                          </>
+                        )}
+                        {`.`}
+                      </>
+                    )
                   })()}
-                  <span className="outcome-highlight">{outcomeSummary.breakEvenMonth}</span> (year <span className="outcome-highlight">{(outcomeSummary.breakEvenMonth / 12).toFixed(1)}</span>).
                 </strong>
               </div>
             )}
@@ -1092,8 +1182,16 @@ function App() {
                         : null}
                     </td>
                     <td>{formatCurrency(row.interestDelta)}</td>
-                    <td>{formatCurrency(row.portfolioValue)}</td>
-                    <td>{formatCurrency(row.portfolioGain)}</td>
+                    <td
+                      title={Number.isFinite(row.portfolioValue) ? `Before tax: ${formatCurrency(row.portfolioValue)}\n15% Tax on gains: ${formatCurrency(row.taxAmount)}\nAfter tax: ${formatCurrency(row.afterTaxPortfolioValue)}` : ''}
+                    >
+                      {formatCurrency(row.afterTaxPortfolioValue)}
+                    </td>
+                    <td
+                      title={Number.isFinite(row.portfolioGain) ? `Before tax: ${formatCurrency(row.portfolioGain)}\n15% Tax: ${formatCurrency(row.taxAmount)}\nAfter tax: ${formatCurrency(row.afterTaxPortfolioGain)}` : ''}
+                    >
+                      {formatCurrency(row.afterTaxPortfolioGain)}
+                    </td>
                     <td
                       className={getRateClass(row.breakEvenRate)}
                       title={getBreakEvenHoverText(row, index)}
@@ -1131,7 +1229,7 @@ function App() {
                   <th>Portfolio value (option 2)</th>
                   <th>Portfolio gain (option 1)</th>
                   <th>Portfolio gain (option 2)</th>
-                  <th>Break-even return (annual %)</th>
+                  <th>Net value difference</th>
                 </tr>
               </thead>
               <tbody>
@@ -1159,11 +1257,39 @@ function App() {
                     </td>
                     <td>{formatCurrency(row.deltaSum)}</td>
                     <td>{formatCurrency(row.interestDeltaSum)}</td>
-                    <td>{formatCurrency(row.portfolioValue)}</td>
-                    <td>{formatCurrency(row.portfolioValueAlt)}</td>
-                    <td>{formatCurrency(row.portfolioGain)}</td>
-                    <td>{formatCurrency(row.portfolioGainAlt)}</td>
-                    <td className={getRateClass(row.breakEvenRate)}>{row.breakEvenLabel}</td>
+                    <td
+                      title={Number.isFinite(row.portfolioValue) && Number.isFinite(row.portfolioGain) ? `Before tax: ${formatCurrency(row.portfolioValue)}\n15% Tax on gains: ${formatCurrency(row.portfolioGain > 0 ? row.portfolioGain * 0.15 : 0)}\nAfter tax: ${formatCurrency(row.portfolioValue - (row.portfolioGain > 0 ? row.portfolioGain * 0.15 : 0))}` : ''}
+                    >
+                      {formatCurrency(row.portfolioValue)}
+                    </td>
+                    <td
+                      title={Number.isFinite(row.portfolioValueAlt) && Number.isFinite(row.portfolioGainAlt) ? `Before tax: ${formatCurrency(row.portfolioValueAlt)}\n15% Tax on gains: ${formatCurrency(row.portfolioGainAlt > 0 ? row.portfolioGainAlt * 0.15 : 0)}\nAfter tax: ${formatCurrency(row.portfolioValueAlt - (row.portfolioGainAlt > 0 ? row.portfolioGainAlt * 0.15 : 0))}` : ''}
+                    >
+                      {formatCurrency(row.portfolioValueAlt)}
+                    </td>
+                    <td
+                      title={Number.isFinite(row.portfolioGain) ? `Before tax: ${formatCurrency(row.portfolioGain)}\n15% Tax: ${formatCurrency(row.portfolioGain > 0 ? row.portfolioGain * 0.15 : 0)}\nAfter tax: ${formatCurrency(row.portfolioGain - (row.portfolioGain > 0 ? row.portfolioGain * 0.15 : 0))}` : ''}
+                    >
+                      {formatCurrency(row.portfolioGain)}
+                    </td>
+                    <td
+                      title={Number.isFinite(row.portfolioGainAlt) ? `Before tax: ${formatCurrency(row.portfolioGainAlt)}\n15% Tax: ${formatCurrency(row.portfolioGainAlt > 0 ? row.portfolioGainAlt * 0.15 : 0)}\nAfter tax: ${formatCurrency(row.portfolioGainAlt - (row.portfolioGainAlt > 0 ? row.portfolioGainAlt * 0.15 : 0))}` : ''}
+                    >
+                      {formatCurrency(row.portfolioGainAlt)}
+                    </td>
+                    <td>
+                      {(() => {
+                        const taxRate = 0.15
+                        const tax1 = row.portfolioGain > 0 ? row.portfolioGain * taxRate : 0
+                        const tax2 = row.portfolioGainAlt > 0 ? row.portfolioGainAlt * taxRate : 0
+                        const afterTax1 = row.portfolioValue - tax1
+                        const afterTax2 = row.portfolioValueAlt - tax2
+                        const equity1 = results[0]?.computed?.principal - row.balanceA
+                        const equity2 = results[1]?.computed?.principal - row.balanceB
+                        const diff = (afterTax1 + equity1) - (afterTax2 + equity2)
+                        return formatCurrency(diff)
+                      })()}
+                    </td>
                   </tr>
                 ))}
               </tbody>
